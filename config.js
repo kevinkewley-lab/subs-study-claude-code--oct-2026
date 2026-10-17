@@ -9,7 +9,7 @@ const CONFIG = {
   // POST endpoint that receives the JSON payload (e.g. a Google Apps Script web app,
   // a JATOS/Firebase function, or your own server). Leave "" to disable.
   // The final screen always offers a "download backup" file as well.
-  SAVE_URL: "",
+  SAVE_URL: "https://script.google.com/macros/s/AKfycbz0l-hYs25PRagZ7QSeE_bUKBMs7TZDC48ffdieRFU4XxHYA01i-zsvOT8X8qBGUnqzTQ/exec",
 
   // Conditions. Assignment is random per participant unless the URL has ?cond=CHINESE
   // (use the URL parameter to run a balanced / blocked assignment from your own schedule).
