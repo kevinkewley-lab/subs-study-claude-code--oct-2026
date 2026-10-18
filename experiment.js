@@ -7,9 +7,11 @@
   const qs = new URLSearchParams(location.search);
 
   // ---------- condition + id ----------
-  const cond = C.CONDITIONS.includes(qs.get("cond"))
-    ? qs.get("cond")
-    : C.CONDITIONS[Math.floor(Math.random() * C.CONDITIONS.length)];
+  // Condition: fixed by ?cond=... in the link, otherwise assigned right after consent
+  // (DataPipe rotation if C.DATAPIPE_ID is set, random if not or if DataPipe cannot be reached).
+  let cond = C.CONDITIONS.includes(qs.get("cond")) ? qs.get("cond") : null;
+  let assignment = cond ? "url" : null;
+  const sessionTag = Date.now().toString(36);
 
   const jsPsych = initJsPsych({
     show_progress_bar: false,
@@ -37,7 +39,7 @@
       fullscreen_enabled: !!(document.fullscreenEnabled || document.webkitFullscreenEnabled)
     };
   }
-  jsPsych.data.addProperties({ study: C.STUDY_ID, cond: cond, pid: qs.get("id") || null });
+  jsPsych.data.addProperties({ study: C.STUDY_ID, cond: cond, assignment_method: assignment, pid: qs.get("id") || null });
 
   // ======================================================================
   // Plugin 1: audio-choice — play clip(s) on tap, then choose an option.
@@ -332,12 +334,40 @@
       .concat(item.distractors.map(d => ({ label: d.t, value: d.src }))));
     const base = { item_id: item.id, word_type: item.type, word: item.word || null, practice: !!isPractice };
     return [
-      { type: AudioChoicePlugin, prompt: bi("Listen to the word from the video. What does it mean?", "請聽影片中的這個字，它是什麼意思？"),
+      { type: AudioChoicePlugin, prompt: bi("Listen to the word from the video. Which definition below is closest to its meaning?", "聽聽影片裡的這個詞。下面哪個定義與它的含義最接近？"),
         clips: [{ label: "Play 播放", src: item.clip }], options: opts,
         data: Object.assign({ phase: "meaning" }, base),
         on_finish: d => { d.correct = d.choice_value === "correct"; d.correct_position = opts.findIndex(o => o.value === "correct"); } },
       confTrial(Object.assign({ phase: "meaning_confidence" }, base))
     ];
+  }
+
+  // ======================================================================
+  // Plugin 4: assign-condition — runs after consent so people who decline do not use up a slot.
+  // ======================================================================
+  class AssignConditionPlugin {
+    static info = { name: "assign-condition", version: "1.0.0", parameters: {}, data: {} };
+    constructor(jsPsych) { this.jsPsych = jsPsych; }
+    trial(el) {
+      el.innerHTML = `<p class="hint">${bi("Loading…", "載入中……")}</p>`;
+      (async () => {
+        if (!cond) {
+          cond = C.CONDITIONS[Math.floor(Math.random() * C.CONDITIONS.length)]; assignment = "random";
+          if (C.DATAPIPE_ID && window.jsPsychPipe) {
+            try {
+              const idx = await Promise.race([
+                jsPsychPipe.getCondition(C.DATAPIPE_ID),
+                new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 6000))
+              ]);
+              if (Number.isInteger(idx)) { cond = C.CONDITIONS[((idx % C.CONDITIONS.length) + C.CONDITIONS.length) % C.CONDITIONS.length]; assignment = "datapipe"; }
+              else assignment = "random_fallback";
+            } catch (err) { assignment = "random_fallback"; }
+          }
+        }
+        jsPsych.data.addProperties({ cond: cond, assignment_method: assignment });
+        this.jsPsych.finishTrial({ cond: cond, assignment_method: assignment });
+      })();
+    }
   }
 
   // ---------- timeline ----------
@@ -347,6 +377,9 @@
   tl.push(btn(`<div class="textblock">${C.CONSENT_HTML}</div>`, [C.CONSENT_AGREE, C.CONSENT_DECLINE], { phase: "consent" }, {
     on_finish: d => { d.consent = d.response === 0; if (d.response !== 0) jsPsych.abortExperiment(`<p>${bi("Thank you. The session has ended.", "謝謝你，測驗已結束。")}</p>`); }
   }));
+
+  // 1b condition assignment (after consent)
+  tl.push({ type: AssignConditionPlugin, data: { phase: "assign_condition" } });
 
   // 2 demographics
   tl.push({
@@ -413,7 +446,7 @@
                "現在請從頭到尾觀看影片。按播放後會進入全螢幕。請不要暫停或快轉，並持續戴著耳塞。")}</p>
       <p>${bi("You will not be able to go back.", "影片無法重看。")}</p></div>`, ["Ready 準備好了"], { phase: "video_intro" }));
   tl.push({
-    type: VideoLockPlugin, src: C.VIDEOS[cond], min_fraction: C.MIN_WATCH_FRACTION, data: { phase: "video" },
+    type: VideoLockPlugin, src: () => C.VIDEOS[cond], min_fraction: C.MIN_WATCH_FRACTION, data: { phase: "video" },
     on_finish: d => { saveAll(false); }
   });
 
@@ -507,11 +540,37 @@
     };
   }
   async function saveAll(isFinal) {
-    if (!C.SAVE_URL) return false;
-    try {
-      const r = await fetch(C.SAVE_URL, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(payload(isFinal)) });
-      return r.ok || r.type === "opaque";
-    } catch (e) { return false; }
+    let ok = false;
+    if (C.DATAPIPE_ID && window.jsPsychPipe) {
+      const pid = String(jsPsych.data.dataProperties.pid || "unknown").replace(/[^\w-]/g, "");
+      const base = `${pid}_${cond}_${sessionTag}`;
+      try {
+        if (!isFinal) {
+          const r = await jsPsychPipe.saveData(C.DATAPIPE_ID, base + "_partial.json", JSON.stringify(payload(false)));
+          ok = !(r && r.error);
+        } else {
+          const r1 = await jsPsychPipe.saveData(C.DATAPIPE_ID, base + "_trials.csv", jsPsych.data.get().csv());
+          const r2 = await jsPsychPipe.saveData(C.DATAPIPE_ID, base + "_full.json", JSON.stringify(payload(true)));
+          ok = !(r1 && r1.error) && !(r2 && r2.error);
+        }
+      } catch (err) { ok = false; }
+    }
+    if (!ok && C.SAVE_URL) {
+      // Google Apps Script (or any endpoint): one POST with the CSV and the JSON. The reply cannot be read
+      // across origins (mode "no-cors"), so a completed request is treated as sent; the backup download is the safety net.
+      try {
+        const pid = String(jsPsych.data.dataProperties.pid || "unknown").replace(/[^\w-]/g, "");
+        await fetch(C.SAVE_URL, {
+          method: "POST", mode: "no-cors", headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: JSON.stringify({
+            secret: C.SAVE_SECRET || "", base: `${pid}_${cond}_${sessionTag}`, final: isFinal,
+            csv: isFinal ? jsPsych.data.get().csv() : null, json: JSON.stringify(payload(isFinal))
+          })
+        });
+        ok = true;
+      } catch (err) { ok = false; }
+    }
+    return ok;
   }
   function downloadBackup() {
     const blob = new Blob([JSON.stringify(payload(true), null, 1)], { type: "application/json" });

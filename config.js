@@ -6,10 +6,19 @@
 const CONFIG = {
   STUDY_ID: "subtitle_study_v2",
 
-  // POST endpoint that receives the JSON payload (e.g. a Google Apps Script web app,
-  // a JATOS/Firebase function, or your own server). Leave "" to disable.
+  // Web-app address of the Google Apps Script that saves CSV and JSON files into your Google Drive
+  // (see google-apps-script/Code.gs). Used when DATAPIPE_ID is empty (or DataPipe fails). Leave "" to disable.
   // The final screen always offers a "download backup" file as well.
   SAVE_URL: "https://script.google.com/macros/s/AKfycbz0l-hYs25PRagZ7QSeE_bUKBMs7TZDC48ffdieRFU4XxHYA01i-zsvOT8X8qBGUnqzTQ/exec",
+  // Optional shared secret, checked by the Apps Script (see google-apps-script/Code.gs). It is visible in this
+  // file, so it only stops casual junk posts.
+  SAVE_SECRET: "",
+
+  // DataPipe (https://pipe.jspsych.org): saves each participant's files to an OSF project and
+  // assigns conditions in rotation (1st participant -> ENGLISH, 2nd -> CHINESE, 3rd -> NO_SUBS, ...).
+  // Paste the 12-character experiment ID here. Leave "" to assign at random and save nowhere
+  // (participants then get a backup file to send you). Conditions in DataPipe must be set to 3.
+  DATAPIPE_ID: "",
 
   // Conditions. Assignment is random per participant unless the URL has ?cond=CHINESE
   // (use the URL parameter to run a balanced / blocked assignment from your own schedule).
